@@ -6,3 +6,6 @@
 
 # Ignore all contents of the wandb folder
 wandb/
+
+# Ignore all parquets
+*.parquet
