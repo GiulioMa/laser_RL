@@ -1,0 +1,8 @@
+# Ignore all .pkl files
+*.pkl
+
+# Ignore all .npy files
+*.npy
+
+# Ignore all contents of the wandb folder
+wandb/

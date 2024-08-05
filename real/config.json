@@ -1,0 +1,48 @@
+{
+    "ac_kwargs":	{
+        "activation":	"ReLU",
+        "hidden_sizes":	[
+            64,
+            80
+        ]
+    },
+    "actor_critic":	"MLPActorCritic",
+    "alpha":	0.0001,
+    "batch_size":	100,
+    "device":	"cuda:0",
+    "ep_len":	80,
+    "episodes_per_epoch":	10,
+    "epochs":	100,
+    "exp_name":	"lambda",
+    "gamma":	0.99,
+    "gradient_steps":	80,
+    "logger":	{
+        "<spinup.utils.logx.EpochLogger object at 0x0000023D2D478890>":	{
+            "epoch_dict":	{},
+            "exp_name":	"lambda",
+            "first_row":	true,
+            "log_current_row":	{},
+            "log_headers":	[],
+            "output_dir":	"real",
+            "output_file":	{
+                "<_io.TextIOWrapper name='real\\\\progress.txt' mode='w' encoding='cp1252'>":	{
+                    "mode":	"w"
+                }
+            }
+        }
+    },
+    "logger_kwargs":	{
+        "exp_name":	"lambda",
+        "output_dir":	"real"
+    },
+    "lr":	0.0001,
+    "num_test_episodes":	1,
+    "polyak":	0.995,
+    "replay_size":	100000,
+    "save_freq":	1,
+    "seed":	0,
+    "server_ip":	"192.168.1.10",
+    "server_port":	7,
+    "start_episode":	100,
+    "update_after":	1
+}
