@@ -83,7 +83,7 @@ class ReplayBuffer:
 
 global_t = 0
 def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        episodes_per_epoch=10, epochs=100, replay_size=int(1e5), gamma=0.99, 
+        episodes_per_epoch=10, epochs=100000, replay_size=int(1e5), gamma=0.99, 
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_episode=100, 
         update_after=1, gradient_steps=50, num_test_episodes=1, ep_len=1000, 
         logger_kwargs=dict(), save_freq=1):
@@ -198,6 +198,8 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         }
     )
 
+    in_scale = core.in_scale
+
     # Initialize the device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -217,7 +219,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     act_limit = core.ACT_LIM
 
     # Create actor-critic module and target networks
-    ac = actor_critic(device, **ac_kwargs).to(device)
+    ac = actor_critic(in_scale, device, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac).to(device)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
@@ -233,10 +235,10 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Initialize alpha as a trainable parameter
     log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
     alpha = log_alpha.exp().item()
-    target_entropy = torch.tensor(-2.)
+    target_entropy = torch.tensor(-1.)
 
     # Optimizer for alpha
-    alpha_optimizer = Adam([log_alpha], lr=lr)
+    alpha_optimizer = Adam([log_alpha], lr=lr/10)
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
@@ -244,6 +246,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data, alpha):
+        #print(ac.pi.training)
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         q1 = ac.q1(o,a)
@@ -273,6 +276,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up function for computing SAC pi loss
     def compute_loss_pi(data, alpha):
+        #print(ac.pi.training)
         o = data['obs']
         pi, logp_pi = ac.pi(o)
         q1_pi = ac.q1(o, pi)
@@ -359,9 +363,9 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         out_brevitas = ac.pi.twin(o)
 
-        scale = float(out_brevitas.scale[0, 0])  
+        out_scale = float(out_brevitas.scale[0, 0])  
 
-        weights_list, _ = weights_creation(ac.pi.twin, scale, ep)
+        weights_list, _ = weights_creation(ac.pi.twin, out_scale, ep)
 
         # Serialize and send the weights list; here, each weight is packed as a single byte, reflecting the int8 data type.
         packed_weights = b''.join(struct.pack('<b', weight) for weight in weights_list)
@@ -373,7 +377,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     def calculate_reward(o, o2):
         r = 0.
-        if 0.01<=o[0]-o2[0]<= 0.03:
+        if 0.02 <= o2[0]-o[0] <= 0.04:
             r = 1.
         return r
 
@@ -388,7 +392,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         print(f'Ready for episode: {ep_num}, test_flag: {test_flag}.')
         
         # Receive obs and actions from FPGA
-        observations, actions = core.receive_data_episode(client, core.N_STEPS * core.N_INPUT, core.N_STEPS)
+        observations, actions = core.receive_data_episode(client, core.N_STEPS * core.N_INPUT, core.N_STEPS, in_scale)
 
         print(f'Received data from episode: {ep_num}, test_flag: {test_flag}.')
 
@@ -494,7 +498,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     client.connect((server_ip, server_port))
 
     # Have to run inference once - create random data
-    o = create_input_tensor(core.N_INPUT, device)
+    o = create_input_tensor(core.N_INPUT, in_scale, device)
     
     # Convert o to tensors and move to the appropriate device
     o = torch.as_tensor(o, dtype=torch.float32, device=device).view(1, -1)

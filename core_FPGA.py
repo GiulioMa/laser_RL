@@ -10,7 +10,7 @@ from brevitas.quant import Int8ActPerTensorFloat, Int8WeightPerTensorFloat, Int8
 from torch.distributions import Normal
 from brevitas.quant_tensor import QuantTensor
 
-START_EPISODE = 50
+START_EPISODE = 100
 EPISODE_PER_EPOCH = 10
 
 N_STEPS = 81
@@ -20,6 +20,7 @@ N_HIDDEN_1 = 64
 N_HIDDEN_2 = 80
 ACT_LIM = 10000
 
+in_scale = 0.001 #1.0 #0.00003311
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -39,10 +40,9 @@ def count_vars(module):
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
-scale = 12000.
 
-def quantize_input_tensor(in_float, scale = 1/scale, bit_width = 16, zero_point = 0.0, training=False, device=torch.device('cpu')):
-    int_value = in_float * scale
+def quantize_input_tensor(in_float, scale, bit_width = 16, zero_point = 0.0, training=False, device=torch.device('cpu')):
+    int_value = in_float / scale
     quant_value = (int_value - zero_point) * scale
     quant_tensor_input = QuantTensor(
     quant_value,
@@ -56,7 +56,7 @@ def quantize_input_tensor(in_float, scale = 1/scale, bit_width = 16, zero_point 
 
 class Digital_twin(nn.Module):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, device):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, scale, device):
         super(Digital_twin, self).__init__()
         self.quant_inp = QuantIdentity(bit_width=16, return_quant_tensor=True, narrow_range=False, signed=True)
         self.fc1 = QuantLinear(obs_dim, hidden_sizes[0], bias=True, 
@@ -71,9 +71,10 @@ class Digital_twin(nn.Module):
                                weight_quant=Int8WeightPerTensorFloat, bias_quant=Int8Bias, return_quant_tensor=True)
         self.fc3.cache_inference_quant_bias=True
         self.device = device
+        self.scale = scale
         
     def forward(self, obs):
-        obs = quantize_input_tensor(obs, training=self.training, device=self.device)
+        obs = quantize_input_tensor(obs, self.scale, training=self.training, device=self.device)
         # obs = self.quant_inp(obs)
         ##print(obs)
         net_out = self.fc1(obs)
@@ -92,9 +93,9 @@ class Digital_twin(nn.Module):
         
 class SquashedGaussianQuantMLPActor(nn.Module):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, act_limit, device):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, act_limit, scale, device):
         super(SquashedGaussianQuantMLPActor, self).__init__()
-        self.twin = Digital_twin(obs_dim, act_dim, hidden_sizes, device)
+        self.twin = Digital_twin(obs_dim, act_dim, hidden_sizes, scale, device)
         self.act_limit = act_limit
 
     def forward(self, obs, deterministic=False, with_logprob=True):
@@ -126,6 +127,8 @@ class SquashedGaussianQuantMLPActor(nn.Module):
         pi_action = torch.tanh(pi_action)
         pi_action = self.act_limit * pi_action/ACT_LIM
 
+        #print('pi action is: ', pi_action.shape)
+
         return pi_action, logp_pi
 
 
@@ -137,11 +140,12 @@ class MLPQFunction(nn.Module):
 
     def forward(self, obs, act):
         q = self.q(torch.cat([obs, act], dim=-1))
+        #print('q is: ', q.shape)
         return torch.squeeze(q, -1) # Critical to ensure q has right shape.
 
 class MLPActorCritic(nn.Module):
 
-    def __init__(self, device, hidden_sizes=(256,256),
+    def __init__(self, scale, device, hidden_sizes=(256,256),
                  activation=nn.ReLU):
         super().__init__()
 
@@ -150,7 +154,7 @@ class MLPActorCritic(nn.Module):
         act_limit = ACT_LIM
 
         # build policy and value functions
-        self.pi = SquashedGaussianQuantMLPActor(obs_dim, act_dim, hidden_sizes, act_limit, device)
+        self.pi = SquashedGaussianQuantMLPActor(obs_dim, act_dim, hidden_sizes, act_limit, scale, device)
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
@@ -170,7 +174,7 @@ class MLPActorCritic(nn.Module):
         model.load_state_dict(torch.load(os.path.join(dir_path, 'model.pth'), map_location=device))
         return model
 
-def receive_data_episode(client, num_data_elem, num_action_elem):
+def receive_data_episode(client, num_data_elem, num_action_elem, scale):
         num_bytes = num_data_elem * 2 + num_action_elem * 4  # Each data is int16, each action is a float
         packet_size = 1024 * 32 # packet size
         data_buffer = bytearray()
@@ -192,8 +196,8 @@ def receive_data_episode(client, num_data_elem, num_action_elem):
         sample2 = []
         for i in range(0, len(samples), 4):  # Step by 4 bytes to read two int16_t
             s1, s2 = struct.unpack('<hh', samples[i:i+4])
-            sample1.append(s1/scale)#12000.
-            sample2.append(s2/scale)#12000.
+            sample1.append(s1*scale)#12000.
+            sample2.append(s2*scale)#12000.
 
         # List to hold the resulting lists of actions
         action_list = []

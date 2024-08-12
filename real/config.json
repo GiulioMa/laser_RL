@@ -7,17 +7,18 @@
         ]
     },
     "actor_critic":	"MLPActorCritic",
-    "alpha":	0.0001,
+    "alpha":	1e-05,
     "batch_size":	100,
     "device":	"cuda:0",
     "ep_len":	80,
     "episodes_per_epoch":	10,
-    "epochs":	100,
+    "epochs":	100000,
     "exp_name":	"lambda",
     "gamma":	0.99,
     "gradient_steps":	80,
+    "in_scale":	0.001,
     "logger":	{
-        "<spinup.utils.logx.EpochLogger object at 0x0000023D2D478890>":	{
+        "<spinup.utils.logx.EpochLogger object at 0x000002B5E5967FB0>":	{
             "epoch_dict":	{},
             "exp_name":	"lambda",
             "first_row":	true,
@@ -40,7 +41,7 @@
     "polyak":	0.995,
     "replay_size":	100000,
     "save_freq":	1,
-    "seed":	0,
+    "seed":	1995,
     "server_ip":	"192.168.1.10",
     "server_port":	7,
     "start_episode":	100,

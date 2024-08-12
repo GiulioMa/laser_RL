@@ -4,7 +4,7 @@ import random
 import torch
 import struct
 
-def create_input_tensor(dim, device):
+def create_input_tensor(dim, scale, device):
     """
     Creates a tensor with shape (1, dim) containing uniformly distributed random numbers 
     within the range of int16.
@@ -28,9 +28,9 @@ def create_input_tensor(dim, device):
     # Generate random numbers uniformly distributed 
     random_numbers = np.random.uniform(low=10., high=16000., size=(1, dim)).astype(np.int16)    
     # Convert the random numbers to a tensor
-    tensor = torch.tensor(random_numbers, dtype=torch.float32, device=device)/12000.
+    tensor = torch.tensor(random_numbers, dtype=torch.float32, device=device)
     
-    return tensor
+    return tensor * scale
 
 def weights_creation(model, scale, ep_num):
     """
@@ -105,11 +105,14 @@ def weights_creation(model, scale, ep_num):
     print("Sent Scale:", scale)
     
     # Generate and send N_STEPS random numbers
+    random_flag = False
     for i in range(core.N_STEPS):
         if ep_num <= core.START_EPISODE:
             random_number = np.arctanh(float(random.uniform(-1, 1))) # Generate a number that will be uniform after applying tanh
+            random_flag = True
         else:
             random_number = float(random.gauss(0.0, 1.0))  # Generate a normally distributed random number
+            random_flag = False
 
         random_numbers.append(random_number)
         random_bytes = struct.pack('<f', random_number)  # Convert float to bytes
@@ -117,4 +120,6 @@ def weights_creation(model, scale, ep_num):
         weights_buffer.extend(random_int8_list)
         
     model.train()
+    if random_flag:
+        print('Random episode')
     return weights_buffer, random_numbers
