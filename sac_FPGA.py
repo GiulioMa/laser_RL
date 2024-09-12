@@ -201,7 +201,8 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     in_scale = core.in_scale
 
     # Initialize the device
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = 'cpu'
 
     server_ip = '192.168.1.10'
     server_port = 7
@@ -231,14 +232,15 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size, device=device)
+    replay_buffer_test = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=ep_len*100, device=device)
 
     # Initialize alpha as a trainable parameter
     log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
     alpha = log_alpha.exp().item()
-    target_entropy = torch.tensor(-1.)
+    target_entropy = torch.tensor(-2.5)
 
     # Optimizer for alpha
-    alpha_optimizer = Adam([log_alpha], lr=lr/10)
+    alpha_optimizer = Adam([log_alpha], lr=1e-3)
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
@@ -300,7 +302,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up function for computing alpha loss
     def compute_loss_alpha(logp_pi):
-        return -(log_alpha * (logp_pi + target_entropy).detach()).mean()
+        return -(log_alpha.exp() * (logp_pi + target_entropy).detach()).mean()
 
     def update(data, alpha):
         global global_t
@@ -376,15 +378,13 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         ac.pi.train()
 
     def calculate_reward(o, o2):
-        r = 0.
-        if 0.02 <= o2[0]-o[0] <= 0.04:
-            r = 1.
+        r = o2[0] / 10.
         return r
 
     def process_episode(replay_buffer, ep_num):
         ep_ret = 0
 
-        if (ep_num % core.EPISODE_PER_EPOCH) == 0:
+        if ((ep_num % core.EPISODE_PER_EPOCH) == 0) or (ep_num >= core.END_TRAIN_EPISODE):
             test_flag = True
         else:
             test_flag = False
@@ -414,6 +414,8 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             o2 = torch.as_tensor(o2, dtype=torch.float32, device=device).view(1, -1)
             r = torch.as_tensor(r, dtype=torch.float32, device=device)
             a = torch.as_tensor(a, dtype=torch.float32, device=device)      
+            wandb.log({"Optical Reflection": o2[0, 0].cpu().numpy()}, step=global_t)
+            wandb.log({"Optical Emission": o2[0, 1].cpu().numpy()}, step=global_t)
 
             # We ignore the "done" signal as it comes from hitting the time
             # horizon (that is, it's an artificial terminal signal
@@ -423,9 +425,13 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             if test_flag: 
                 # Log action
                 wandb.log({"TestActions": a.cpu().numpy()}, step=global_t)
+
+                # Populate test replay buffer
+                replay_buffer_test.store(o, a, r, o2, d)
             else:
                 # Log action
                 wandb.log({"actions": a.cpu().numpy()}, step=global_t)
+
             
                 # Populate replay buffer
                 replay_buffer.store(o, a, r, o2, d)
@@ -461,6 +467,9 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         
         # Save replay buffer
         replay_buffer.save(os.path.join(checkpoint_dir, 'replay_buffer.pkl'))
+
+        # Save the replay buffer for testing
+        replay_buffer_test.save(os.path.join(checkpoint_dir, 'replay_buffer_test.pkl'))
         
         # Save the epoch number
         with open(os.path.join(checkpoint_dir, 'epoch.txt'), 'w') as f:
@@ -477,7 +486,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             return None, None, None
         
         # Load actor-critic model
-        ac = MLPActorCritic.load(checkpoint_dir, device)
+        ac = core.MLPActorCritic.load(checkpoint_dir, device)
         
         # Load replay buffer
         replay_buffer = ReplayBuffer.load(os.path.join(checkpoint_dir, 'replay_buffer.pkl'), device)
@@ -507,7 +516,7 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for episode_num in range(total_epidodes):
-
+        s = time.time()
         # Update the FPGA
         FPGA_update(o, episode_num, client)
         
@@ -519,6 +528,8 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             for j in range(gradient_steps):
                 batch = replay_buffer.sample_batch(batch_size)
                 alpha = update(data=batch, alpha=alpha)
+        e = time.time()
+        print(f'Episode {episode_num} took {(e-s):.4f} seconds.')
 
         # End of epoch handling
         if (episode_num+1) % episodes_per_epoch == 0:
@@ -527,20 +538,33 @@ def sac(actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Save model
             save_checkpoint(logger.output_dir, epoch + 1)
 
-            # Log info about epoch
-            logger.log_tabular('Epoch', epoch)
-            logger.log_tabular('EpRet', with_min_and_max=True)
-            logger.log_tabular('TestEpRet', with_min_and_max=True)
-            logger.log_tabular('EpLen', average_only=True)
-            logger.log_tabular('TestEpLen', average_only=True)
-            logger.log_tabular('TotalEnvInteracts', global_t)
-            logger.log_tabular('Q1Vals', with_min_and_max=True)
-            logger.log_tabular('Q2Vals', with_min_and_max=True)
-            logger.log_tabular('LogPi', with_min_and_max=True)
-            logger.log_tabular('LossPi', average_only=True)
-            logger.log_tabular('LossQ', average_only=True)
-            logger.log_tabular('Time', time.time()-start_time)
-            logger.dump_tabular()
+            if episode_num < core.END_TRAIN_EPISODE:
+                # Log info about epoch
+                logger.log_tabular('Epoch', epoch)
+                logger.log_tabular('EpRet', with_min_and_max=True)
+                logger.log_tabular('TestEpRet', with_min_and_max=True)
+                logger.log_tabular('EpLen', average_only=True)
+                logger.log_tabular('TestEpLen', average_only=True)
+                logger.log_tabular('TotalEnvInteracts', global_t)
+                logger.log_tabular('Q1Vals', with_min_and_max=True)
+                logger.log_tabular('Q2Vals', with_min_and_max=True)
+                logger.log_tabular('LogPi', with_min_and_max=True)
+                logger.log_tabular('LossPi', average_only=True)
+                logger.log_tabular('LossQ', average_only=True)
+                logger.log_tabular('Time', time.time()-start_time)
+                logger.dump_tabular()
+            else: 
+                 # Log info about epoch
+                logger.log_tabular('Epoch', epoch)
+                logger.log_tabular('TestEpRet', with_min_and_max=True)
+                logger.log_tabular('TotalEnvInteracts', global_t)
+                logger.log_tabular('Time', time.time()-start_time)
+                logger.dump_tabular()  
+        
+        if episode_num >= core.END_TRAIN_EPISODE:
+            # Save model
+            save_checkpoint(logger.output_dir, epoch + 1)
+                         
     wandb.finish()
 
 if __name__ == '__main__':

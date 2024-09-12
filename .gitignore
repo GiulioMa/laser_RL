@@ -9,3 +9,5 @@ wandb/
 
 # Ignore all parquets
 *.parquet
+
+__pycache__

@@ -10,15 +10,16 @@ from brevitas.quant import Int8ActPerTensorFloat, Int8WeightPerTensorFloat, Int8
 from torch.distributions import Normal
 from brevitas.quant_tensor import QuantTensor
 
-START_EPISODE = 100
+START_EPISODE = 25
 EPISODE_PER_EPOCH = 10
+END_TRAIN_EPISODE = 372
 
 N_STEPS = 81
 N_INPUT = 2
 N_OUTPUT = 2
 N_HIDDEN_1 = 64
 N_HIDDEN_2 = 80
-ACT_LIM = 10000
+ACT_LIM = 32767
 
 in_scale = 0.001 #1.0 #0.00003311
 
